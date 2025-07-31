@@ -6,7 +6,7 @@ const path = require('path');
 class Database {
   constructor() {
     this.db = null;
-    this.dbPath = path.join(__dirname, '../../database/ecommerce.db');
+    this.dbPath = path.join(__dirname, '../../database/ecommerce_refactored.db');
   }
 
   // Initialize database connection
@@ -24,36 +24,102 @@ class Database {
     });
   }
 
-  // Create tables
+  // Create tables with refactored schema
   async createTables() {
+    // Create departments table first
+    const createDepartmentsTable = `
+      CREATE TABLE IF NOT EXISTS departments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+
+    // Create products table with department_id foreign key
     const createProductsTable = `
       CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         description TEXT,
         price REAL NOT NULL,
-        department TEXT NOT NULL,
+        department_id INTEGER NOT NULL,
         image_url TEXT,
         stock_quantity INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (department_id) REFERENCES departments (id)
       )
     `;
 
     return new Promise((resolve, reject) => {
-      this.db.run(createProductsTable, (err) => {
+      this.db.serialize(() => {
+        // Create departments table
+        this.db.run(createDepartmentsTable, (err) => {
+          if (err) {
+            console.error('Error creating departments table:', err.message);
+            reject(err);
+          } else {
+            console.log('Departments table created successfully');
+          }
+        });
+
+        // Create products table
+        this.db.run(createProductsTable, (err) => {
+          if (err) {
+            console.error('Error creating products table:', err.message);
+            reject(err);
+          } else {
+            console.log('Products table created successfully');
+            resolve();
+          }
+        });
+      });
+    });
+  }
+
+  // Insert departments from CSV data
+  async insertDepartments(products) {
+    const departments = [...new Set(products.map(p => p.department))];
+    
+    const insertDepartmentQuery = `
+      INSERT OR IGNORE INTO departments (name) VALUES (?)
+    `;
+
+    return new Promise((resolve, reject) => {
+      const stmt = this.db.prepare(insertDepartmentQuery);
+      
+      departments.forEach((department) => {
+        stmt.run([department]);
+      });
+
+      stmt.finalize((err) => {
         if (err) {
-          console.error('Error creating products table:', err.message);
+          console.error('Error inserting departments:', err.message);
           reject(err);
         } else {
-          console.log('Products table created successfully');
-          resolve();
+          console.log(`Inserted ${departments.length} departments`);
+          resolve(departments);
         }
       });
     });
   }
 
-  // Load data from CSV
+  // Get department ID by name
+  async getDepartmentId(departmentName) {
+    return new Promise((resolve, reject) => {
+      this.db.get('SELECT id FROM departments WHERE name = ?', [departmentName], (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row ? row.id : null);
+        }
+      });
+    });
+  }
+
+  // Load data from CSV with refactored structure
   async loadDataFromCSV() {
     const csvPath = path.join(__dirname, '../data/products.csv');
     const results = [];
@@ -64,7 +130,12 @@ class Database {
         .on('data', (data) => results.push(data))
         .on('end', async () => {
           try {
-            await this.insertProducts(results);
+            // First insert departments
+            await this.insertDepartments(results);
+            
+            // Then insert products with department_id
+            await this.insertProductsWithDepartments(results);
+            
             console.log(`Loaded ${results.length} products from CSV`);
             resolve();
           } catch (error) {
@@ -78,44 +149,65 @@ class Database {
     });
   }
 
-  // Insert products into database
-  async insertProducts(products) {
+  // Insert products with department_id foreign key
+  async insertProductsWithDepartments(products) {
     const insertQuery = `
-      INSERT OR REPLACE INTO products (id, name, description, price, department, image_url, stock_quantity)
+      INSERT OR REPLACE INTO products (id, name, description, price, department_id, image_url, stock_quantity)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `;
 
     return new Promise((resolve, reject) => {
       const stmt = this.db.prepare(insertQuery);
       
-      products.forEach((product) => {
-        stmt.run([
-          product.id,
-          product.name,
-          product.description,
-          parseFloat(product.price),
-          product.department,
-          product.image_url,
-          parseInt(product.stock_quantity)
-        ]);
-      });
-
-      stmt.finalize((err) => {
-        if (err) {
-          console.error('Error inserting products:', err.message);
-          reject(err);
-        } else {
-          console.log('Products inserted successfully');
-          resolve();
+      const insertProduct = async (product) => {
+        try {
+          const departmentId = await this.getDepartmentId(product.department);
+          if (departmentId) {
+            stmt.run([
+              product.id,
+              product.name,
+              product.description,
+              parseFloat(product.price),
+              departmentId,
+              product.image_url,
+              parseInt(product.stock_quantity)
+            ]);
+          }
+        } catch (error) {
+          console.error(`Error inserting product ${product.id}:`, error);
         }
-      });
+      };
+
+      // Process products sequentially to ensure departments exist
+      const processProducts = async () => {
+        for (const product of products) {
+          await insertProduct(product);
+        }
+        
+        stmt.finalize((err) => {
+          if (err) {
+            console.error('Error finalizing product insertions:', err.message);
+            reject(err);
+          } else {
+            console.log('Products inserted successfully with department references');
+            resolve();
+          }
+        });
+      };
+
+      processProducts();
     });
   }
 
-  // Get all products
+  // Get all products with department information
   async getAllProducts() {
     return new Promise((resolve, reject) => {
-      this.db.all('SELECT * FROM products ORDER BY id', (err, rows) => {
+      this.db.all(`
+        SELECT p.*, d.name as department 
+        FROM products p 
+        JOIN departments d ON p.department_id = d.id 
+        ORDER BY p.id
+      `, (err, rows) => {
         if (err) {
           reject(err);
         } else {
@@ -125,10 +217,15 @@ class Database {
     });
   }
 
-  // Get product by ID
+  // Get product by ID with department information
   async getProductById(id) {
     return new Promise((resolve, reject) => {
-      this.db.get('SELECT * FROM products WHERE id = ?', [id], (err, row) => {
+      this.db.get(`
+        SELECT p.*, d.name as department 
+        FROM products p 
+        JOIN departments d ON p.department_id = d.id 
+        WHERE p.id = ?
+      `, [id], (err, row) => {
         if (err) {
           reject(err);
         } else {
@@ -141,11 +238,43 @@ class Database {
   // Get products by department
   async getProductsByDepartment(department) {
     return new Promise((resolve, reject) => {
-      this.db.all('SELECT * FROM products WHERE department = ? ORDER BY id', [department], (err, rows) => {
+      this.db.all(`
+        SELECT p.*, d.name as department 
+        FROM products p 
+        JOIN departments d ON p.department_id = d.id 
+        WHERE d.name = ? 
+        ORDER BY p.id
+      `, [department], (err, rows) => {
         if (err) {
           reject(err);
         } else {
           resolve(rows);
+        }
+      });
+    });
+  }
+
+  // Get all departments
+  async getAllDepartments() {
+    return new Promise((resolve, reject) => {
+      this.db.all('SELECT * FROM departments ORDER BY name', (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      });
+    });
+  }
+
+  // Get department by ID
+  async getDepartmentById(id) {
+    return new Promise((resolve, reject) => {
+      this.db.get('SELECT * FROM departments WHERE id = ?', [id], (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row);
         }
       });
     });

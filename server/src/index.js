@@ -27,7 +27,9 @@ app.get('/', (req, res) => {
     endpoints: {
       products: '/api/products',
       productById: '/api/products/:id',
-      productsByDepartment: '/api/products/department/:department'
+      productsByDepartment: '/api/products/department/:department',
+      departments: '/api/departments',
+      departmentById: '/api/departments/:id'
     }
   });
 });
@@ -100,6 +102,52 @@ app.get('/api/products/department/:department', async (req, res) => {
   }
 });
 
+// GET all departments
+app.get('/api/departments', async (req, res) => {
+  try {
+    const departments = await db.getAllDepartments();
+    res.json({
+      success: true,
+      count: departments.length,
+      data: departments
+    });
+  } catch (error) {
+    console.error('Error fetching departments:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching departments',
+      error: error.message
+    });
+  }
+});
+
+// GET department by ID
+app.get('/api/departments/:id', async (req, res) => {
+  try {
+    const departmentId = parseInt(req.params.id);
+    const department = await db.getDepartmentById(departmentId);
+    
+    if (!department) {
+      return res.status(404).json({
+        success: false,
+        message: 'Department not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: department
+    });
+  } catch (error) {
+    console.error('Error fetching department:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching department',
+      error: error.message
+    });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
@@ -125,6 +173,8 @@ app.listen(PORT, () => {
   console.log(`   GET /api/products - Get all products`);
   console.log(`   GET /api/products/:id - Get product by ID`);
   console.log(`   GET /api/products/department/:department - Get products by department`);
+  console.log(`   GET /api/departments - Get all departments`);
+  console.log(`   GET /api/departments/:id - Get department by ID`);
 });
 
 // Graceful shutdown
