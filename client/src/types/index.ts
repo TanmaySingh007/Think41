@@ -3,11 +3,28 @@ export interface Product {
   name: string;
   description: string;
   price: number;
+  department_id: number;
   department: string;
   image_url: string;
   stock_quantity: number;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface Department {
+  id: number;
+  name: string;
+  description?: string;
+  created_at?: string;
+  updated_at?: string;
+  product_count?: number;
+}
+
+export interface FilterState {
+  selectedDepartment: string | null;
+  searchQuery: string;
+  sortBy: 'name' | 'price' | 'department';
+  sortOrder: 'asc' | 'desc';
 }
 
 export interface ApiResponse<T> {

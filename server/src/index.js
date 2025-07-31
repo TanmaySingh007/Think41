@@ -5,7 +5,7 @@ const morgan = require('morgan');
 const Database = require('./database');
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 4000;
 
 // Middleware
 app.use(helmet());
@@ -34,13 +34,37 @@ app.get('/', (req, res) => {
   });
 });
 
-// GET all products
+// GET all products with filtering
 app.get('/api/products', async (req, res) => {
   try {
-    const products = await db.getAllProducts();
+    const { 
+      search, 
+      department, 
+      minPrice, 
+      maxPrice, 
+      limit, 
+      offset,
+      sortBy,
+      sortOrder
+    } = req.query;
+    
+    const filters = {
+      search,
+      department,
+      minPrice: minPrice ? parseFloat(minPrice) : undefined,
+      maxPrice: maxPrice ? parseFloat(maxPrice) : undefined,
+      limit: limit ? parseInt(limit) : 20,
+      offset: offset ? parseInt(offset) : 0,
+      sortBy: sortBy || 'name',
+      sortOrder: sortOrder || 'ASC'
+    };
+    
+    const products = await db.getProductsWithFilters(filters);
+    
     res.json({
       success: true,
       count: products.length,
+      filters,
       data: products
     });
   } catch (error) {
@@ -105,7 +129,17 @@ app.get('/api/products/department/:department', async (req, res) => {
 // GET all departments
 app.get('/api/departments', async (req, res) => {
   try {
-    const departments = await db.getAllDepartments();
+    const { search, withCounts } = req.query;
+    
+    let departments;
+    if (search) {
+      departments = await db.searchDepartments(search);
+    } else if (withCounts === 'true') {
+      departments = await db.getDepartmentsWithProductCounts();
+    } else {
+      departments = await db.getAllDepartments();
+    }
+    
     res.json({
       success: true,
       count: departments.length,
@@ -125,7 +159,14 @@ app.get('/api/departments', async (req, res) => {
 app.get('/api/departments/:id', async (req, res) => {
   try {
     const departmentId = parseInt(req.params.id);
-    const department = await db.getDepartmentById(departmentId);
+    const { stats } = req.query;
+    
+    let department;
+    if (stats === 'true') {
+      department = await db.getDepartmentStats(departmentId);
+    } else {
+      department = await db.getDepartmentById(departmentId);
+    }
     
     if (!department) {
       return res.status(404).json({
@@ -145,6 +186,105 @@ app.get('/api/departments/:id', async (req, res) => {
       message: 'Error fetching department',
       error: error.message
     });
+  }
+});
+
+// POST create new department
+app.post('/api/departments', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Department name is required'
+      });
+    }
+    
+    const department = await db.createDepartment(name, description);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Department created successfully',
+      data: department
+    });
+  } catch (error) {
+    console.error('Error creating department:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creating department',
+      error: error.message
+    });
+  }
+});
+
+// PUT update department
+app.put('/api/departments/:id', async (req, res) => {
+  try {
+    const departmentId = parseInt(req.params.id);
+    const { name, description } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Department name is required'
+      });
+    }
+    
+    const department = await db.updateDepartment(departmentId, name, description);
+    
+    res.json({
+      success: true,
+      message: 'Department updated successfully',
+      data: department
+    });
+  } catch (error) {
+    console.error('Error updating department:', error);
+    if (error.message === 'Department not found') {
+      res.status(404).json({
+        success: false,
+        message: 'Department not found'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error updating department',
+        error: error.message
+      });
+    }
+  }
+});
+
+// DELETE department
+app.delete('/api/departments/:id', async (req, res) => {
+  try {
+    const departmentId = parseInt(req.params.id);
+    const result = await db.deleteDepartment(departmentId);
+    
+    res.json({
+      success: true,
+      message: 'Department deleted successfully',
+      data: result
+    });
+  } catch (error) {
+    console.error('Error deleting department:', error);
+    if (error.message === 'Department not found') {
+      res.status(404).json({
+        success: false,
+        message: 'Department not found'
+      });
+    } else if (error.message.includes('associated products')) {
+      res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Error deleting department',
+        error: error.message
+      });
+    }
   }
 });
 
@@ -170,18 +310,17 @@ app.use('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📊 API Documentation:`);
-  console.log(`   GET /api/products - Get all products`);
+  console.log(`   GET /api/products - Get all products (with filtering)`);
   console.log(`   GET /api/products/:id - Get product by ID`);
   console.log(`   GET /api/products/department/:department - Get products by department`);
   console.log(`   GET /api/departments - Get all departments`);
+  console.log(`   GET /api/departments?withCounts=true - Get departments with product counts`);
+  console.log(`   GET /api/departments?search=term - Search departments`);
   console.log(`   GET /api/departments/:id - Get department by ID`);
-});
-
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n🛑 Shutting down server...');
-  db.close();
-  process.exit(0);
+  console.log(`   GET /api/departments/:id?stats=true - Get department with statistics`);
+  console.log(`   POST /api/departments - Create new department`);
+  console.log(`   PUT /api/departments/:id - Update department`);
+  console.log(`   DELETE /api/departments/:id - Delete department`);
 });
 
 module.exports = app; 

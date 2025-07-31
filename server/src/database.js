@@ -6,7 +6,7 @@ const path = require('path');
 class Database {
   constructor() {
     this.db = null;
-    this.dbPath = path.join(__dirname, '../../database/ecommerce_refactored.db');
+    this.dbPath = path.join(__dirname, '../database/ecommerce_refactored.db');
   }
 
   // Initialize database connection
@@ -275,6 +275,199 @@ class Database {
           reject(err);
         } else {
           resolve(row);
+        }
+      });
+    });
+  }
+
+  // Get departments with product counts
+  async getDepartmentsWithProductCounts() {
+    return new Promise((resolve, reject) => {
+      this.db.all(`
+        SELECT d.*, COUNT(p.id) as product_count
+        FROM departments d
+        LEFT JOIN products p ON d.id = p.department_id
+        GROUP BY d.id
+        ORDER BY d.name
+      `, (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      });
+    });
+  }
+
+  // Get department statistics
+  async getDepartmentStats(departmentId) {
+    return new Promise((resolve, reject) => {
+      this.db.get(`
+        SELECT 
+          d.*,
+          COUNT(p.id) as total_products,
+          AVG(p.price) as avg_price,
+          MIN(p.price) as min_price,
+          MAX(p.price) as max_price,
+          SUM(p.stock_quantity) as total_stock
+        FROM departments d
+        LEFT JOIN products p ON d.id = p.department_id
+        WHERE d.id = ?
+        GROUP BY d.id
+      `, [departmentId], (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row);
+        }
+      });
+    });
+  }
+
+  // Search departments by name
+  async searchDepartments(searchTerm) {
+    return new Promise((resolve, reject) => {
+      this.db.all(`
+        SELECT d.*, COUNT(p.id) as product_count
+        FROM departments d
+        LEFT JOIN products p ON d.id = p.department_id
+        WHERE d.name LIKE ?
+        GROUP BY d.id
+        ORDER BY d.name
+      `, [`%${searchTerm}%`], (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      });
+    });
+  }
+
+  // Create new department
+  async createDepartment(name, description = null) {
+    return new Promise((resolve, reject) => {
+      this.db.run(`
+        INSERT INTO departments (name, description)
+        VALUES (?, ?)
+      `, [name, description], function(err) {
+        if (err) {
+          reject(err);
+        } else {
+          resolve({ id: this.lastID, name, description });
+        }
+      });
+    });
+  }
+
+  // Update department
+  async updateDepartment(id, name, description = null) {
+    return new Promise((resolve, reject) => {
+      this.db.run(`
+        UPDATE departments 
+        SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [name, description, id], function(err) {
+        if (err) {
+          reject(err);
+        } else {
+          if (this.changes > 0) {
+            resolve({ id, name, description });
+          } else {
+            reject(new Error('Department not found'));
+          }
+        }
+      });
+    });
+  }
+
+  // Delete department (only if no products are associated)
+  async deleteDepartment(id) {
+    return new Promise((resolve, reject) => {
+      // First check if department has products
+      this.db.get(`
+        SELECT COUNT(*) as product_count
+        FROM products
+        WHERE department_id = ?
+      `, [id], (err, row) => {
+        if (err) {
+          reject(err);
+        } else if (row.product_count > 0) {
+          reject(new Error('Cannot delete department with associated products'));
+        } else {
+          // Delete the department
+          this.db.run('DELETE FROM departments WHERE id = ?', [id], function(err) {
+            if (err) {
+              reject(err);
+            } else {
+              if (this.changes > 0) {
+                resolve({ id, deleted: true });
+              } else {
+                reject(new Error('Department not found'));
+              }
+            }
+          });
+        }
+      });
+    });
+  }
+
+  // Get products with pagination and filtering
+  async getProductsWithFilters(filters = {}) {
+    const { 
+      search, 
+      department, 
+      minPrice, 
+      maxPrice, 
+      limit = 20, 
+      offset = 0,
+      sortBy = 'name',
+      sortOrder = 'ASC'
+    } = filters;
+
+    let query = `
+      SELECT p.*, d.name as department 
+      FROM products p 
+      JOIN departments d ON p.department_id = d.id 
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (search) {
+      query += ` AND (p.name LIKE ? OR p.description LIKE ?)`;
+      params.push(`%${search}%`, `%${search}%`);
+    }
+
+    if (department) {
+      query += ` AND d.name = ?`;
+      params.push(department);
+    }
+
+    if (minPrice !== undefined) {
+      query += ` AND p.price >= ?`;
+      params.push(minPrice);
+    }
+
+    if (maxPrice !== undefined) {
+      query += ` AND p.price <= ?`;
+      params.push(maxPrice);
+    }
+
+    // Validate sortBy to prevent SQL injection
+    const validSortFields = ['name', 'price', 'department', 'created_at'];
+    const sortField = validSortFields.includes(sortBy) ? sortBy : 'name';
+    const order = sortOrder.toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+
+    query += ` ORDER BY p.${sortField} ${order}`;
+    query += ` LIMIT ? OFFSET ?`;
+    params.push(limit, offset);
+
+    return new Promise((resolve, reject) => {
+      this.db.all(query, params, (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
         }
       });
     });
