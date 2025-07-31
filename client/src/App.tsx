@@ -1,12 +1,21 @@
 import React, { useState } from 'react';
-import { Product } from './types';
-import { useProducts, useProductById } from './hooks/useProducts';
+import { Product, FilterState } from './types';
+import { useFilteredProducts, useDepartments } from './hooks/useProducts';
 import ProductList from './components/ProductList';
 import ProductDetail from './components/ProductDetail';
+import ProductPageLayout from './components/ProductPageLayout';
 
 function App() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const { products, loading, error } = useProducts();
+  const [filters, setFilters] = useState<FilterState>({
+    selectedDepartment: null,
+    searchQuery: '',
+    sortBy: 'name',
+    sortOrder: 'asc'
+  });
+
+  const { products, loading, error } = useFilteredProducts(filters);
+  const { departments, loading: departmentsLoading, error: departmentsError } = useDepartments();
 
   const handleProductClick = (product: Product) => {
     setSelectedProduct(product);
@@ -14,6 +23,10 @@ function App() {
 
   const handleBackToList = () => {
     setSelectedProduct(null);
+  };
+
+  const handleFiltersChange = (newFilters: FilterState) => {
+    setFilters(newFilters);
   };
 
   return (
@@ -56,10 +69,14 @@ function App() {
               </p>
             </div>
             
-            <ProductList
+            <ProductPageLayout
               products={products}
               loading={loading}
               error={error}
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
+              departments={departments}
+              departmentsLoading={departmentsLoading}
               onProductClick={handleProductClick}
             />
           </div>
