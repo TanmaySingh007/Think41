@@ -1,4 +1,4 @@
-# E-Commerce Full-Stack Application
+# Think41 - E-Commerce Full-Stack Application
 
 ## Project Overview
 A complete e-commerce web application built from scratch with 6 progressive milestones.
@@ -53,4 +53,4 @@ Think41/
 ## Development Commands
 - `npm run dev:client` - Start frontend development server
 - `npm run dev:server` - Start backend development server
-- `npm run dev` - Start both servers concurrently 
+- `npm run dev` - Start both servers concurrently
